@@ -1,38 +1,47 @@
-# local_llm_assistant/core/agent.py
+# core/agent.py
 
-from langchain.agents import initialize_agent, Tool
-from langchain.agents.agent_types import AgentType
-from core import tools, model
+from core.model import get_llm
+from core.tools import get_search_tool
 
-def search_tool_func(query: str) -> str:
-    search = tools.get_search_tool()
-    return search(query)
+llm = get_llm()
+search_tool = get_search_tool()
 
-search_tool = Tool(
-    name="Web Search",
-    func=search_tool_func,
-    description="Useful for answering questions by searching the internet."
-)
+def run_agent(user_message: str, chat_history: list, extracted_text: str = "") -> tuple[str, list]:
+    """
+    Main agent function to process user message with chat history and optional extracted file context.
 
-def file_analysis_tool_func(text: str) -> str:
-    # Simple echo or limited summary of file content; expand as needed
-    snippet = text[:1000]
-    return f"File content preview (first 1000 chars):\n{snippet}"
+    Args:
+        user_message (str): The latest user input message.
+        chat_history (list): List of tuples (user, assistant) representing the conversation.
+        extracted_text (str): Optional extracted content from uploaded files.
 
-file_analysis_tool = Tool(
-    name="File Analyzer",
-    func=file_analysis_tool_func,
-    description="Analyzes and summarizes text extracted from uploaded files."
-)
+    Returns:
+        response (str): Assistant's response.
+        updated_chat_history (list): Updated chat history including the new exchange.
+    """
 
-llm = model.get_llm()
+    # Compose context for LLM prompt
+    # You can adjust prompt formatting as needed
+    context_parts = []
 
-agent = initialize_agent(
-    tools=[search_tool, file_analysis_tool],
-    llm=llm,
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True,
-)
+    if chat_history:
+        # Flatten chat history into a string for context
+        for i, (user_msg, assistant_msg) in enumerate(chat_history):
+            context_parts.append(f"User: {user_msg}")
+            context_parts.append(f"Assistant: {assistant_msg}")
 
-def run_agent(prompt: str) -> str:
-    return agent.run(prompt)
+    if extracted_text:
+        context_parts.append(f"Extracted File Content:\n{extracted_text}")
+
+    context_parts.append(f"User: {user_message}")
+
+    prompt = "\n".join(context_parts) + "\nAssistant:"
+
+    # Optionally, implement web search trigger based on user_message content or a keyword
+    # For now, we keep it simple and just query the LLM with the full context
+    response = llm(prompt)
+
+    # Update chat history
+    updated_chat_history = chat_history + [(user_message, response)]
+
+    return response, updated_chat_history

@@ -42,8 +42,11 @@ def profile_summary_for_prompt() -> str:
     name = profile.get("name", "User")
     interests = ", ".join(profile.get("interests", []))
     style = profile.get("preferences", {}).get("response_style", "")
-    return (
-        f"User's name is {name}. "
+
+    prompt = (
+        "You are an assistant helping the user. "
+        f"The user's name is {name}. "
         f"Interests include: {interests}. "
         f"Preferred response style: {style}."
     )
+    return prompt
