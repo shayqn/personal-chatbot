@@ -1,47 +1,104 @@
 # core/agent.py
 
+"""
+Agent module for the local LLM assistant.
+
+This module sets up and runs a LangChain conversational agent
+that integrates user profile context, memory, and external tools
+such as web search. It manages the conversation memory with
+a system role message containing the user profile to provide
+personalized and context-aware responses.
+
+Key functions:
+- create_system_message: Generate system prompt from user profile
+- run_agent: Run the agent with input message, memory, and tools
+"""
+
+from typing import List, Tuple, Any
+
+from langchain.memory import ConversationBufferMemory
+from langchain.schema import SystemMessage
+from langchain.agents import initialize_agent, AgentType
+from langchain.schema import HumanMessage, AIMessage
 from core.model import get_llm
-from core.tools import get_search_tool
+from core.tools import get_tools
+from core.profile import load_profile
 
-llm = get_llm()
-search_tool = get_search_tool()
 
-def run_agent(user_message: str, chat_history: list, extracted_text: str = "") -> tuple[str, list]:
+
+
+def create_system_message(profile: dict) -> str:
     """
-    Main agent function to process user message with chat history and optional extracted file context.
+    Build a system message string incorporating user profile info.
 
     Args:
-        user_message (str): The latest user input message.
-        chat_history (list): List of tuples (user, assistant) representing the conversation.
-        extracted_text (str): Optional extracted content from uploaded files.
+        profile (dict): User profile loaded from profile.json
 
     Returns:
-        response (str): Assistant's response.
-        updated_chat_history (list): Updated chat history including the new exchange.
+        str: System prompt describing user info and behavior instructions
+    """
+    interests = ", ".join(profile.get("interests", []))
+    style = profile.get("preferences", {}).get("response_style", "")
+    name = profile.get("name", "User")
+
+    system_msg = (
+        "You are a helpful assistant. "
+        "Use the following information to personalize your responses:\n"
+        f"User's name: {name}\n"
+        f"Interests: {interests}\n"
+        f"Preferred response style: {style}\n"
+        "You should only use external tools like search if the user's question requires "
+        "information beyond what you confidently know or the user profile.\n"
+        "For personal or common knowledge questions, answer directly and clearly without searching.\n"
+    )
+    return system_msg
+
+
+def run_agent(message: str, chat_history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]:
+    """
+    Process a user message through the LangChain agent with memory and tools.
+
+    Args:
+        message (str): The user's input message
+        chat_history (List[Tuple[str, str]]): The current conversation history
+
+    Returns:
+        Tuple[str, List[Tuple[str, str]]]: Agent's response and updated chat history
     """
 
-    # Compose context for LLM prompt
-    # You can adjust prompt formatting as needed
-    context_parts = []
+    # Load profile info and generate system prompt
+    profile = load_profile()
+    system_message_str = create_system_message(profile)
 
-    if chat_history:
-        # Flatten chat history into a string for context
-        for i, (user_msg, assistant_msg) in enumerate(chat_history):
-            context_parts.append(f"User: {user_msg}")
-            context_parts.append(f"Assistant: {assistant_msg}")
+    # Setup memory and replay past conversation into memory
+    memory = ConversationBufferMemory(
+        memory_key="chat_history",
+        return_messages=True,
+        initial_messages=[SystemMessage(content=system_message_str)],
+    )
 
-    if extracted_text:
-        context_parts.append(f"Extracted File Content:\n{extracted_text}")
+    # Rebuild memory with prior chat messages
+    for user_msg, bot_msg in chat_history:
+        memory.chat_memory.add_user_message(user_msg)
+        memory.chat_memory.add_ai_message(bot_msg)
 
-    context_parts.append(f"User: {user_message}")
+    # Load LLM and tools
+    llm = get_llm()
+    tools = get_tools()
 
-    prompt = "\n".join(context_parts) + "\nAssistant:"
+    # Initialize agent with memory
+    agent = initialize_agent(
+        tools=tools,
+        llm=llm,
+        agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
+        memory=memory,
+        verbose=True,
+    )
 
-    # Optionally, implement web search trigger based on user_message content or a keyword
-    # For now, we keep it simple and just query the LLM with the full context
-    response = llm(prompt)
+    # Generate response
+    response = agent.run(input=message)
 
-    # Update chat history
-    updated_chat_history = chat_history + [(user_message, response)]
+    # Append latest interaction to chat history
+    updated_history = chat_history + [(message, response)]
 
-    return response, updated_chat_history
+    return response, updated_history

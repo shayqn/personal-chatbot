@@ -1,168 +1,119 @@
 # core/tools.py
 
+"""
+Tools module for the local LLM assistant.
+
+This module provides utility functions wrapped as LangChain Tools
+to be used by the conversational agent. It includes file content
+extractors and an internet search tool.
+
+Key functions:
+- extract_text_from_file: Extract text content from uploaded files (txt, json, pdf)
+- search_web: Perform DuckDuckGo web search and return summaries
+- get_tools: Return a list of LangChain Tool objects for the agent
+"""
+
 import io
-import asyncio
 import json
-from typing import Optional, Union, Any
-import fitz  # PyMuPDF
-import pandas as pd
-from typing import List, Dict
+from typing import List, Any
+
+from langchain.tools import Tool
+
 from duckduckgo_search import DDGS
 
-FileInput = Union[str, io.BytesIO]
+from PyPDF2 import PdfReader
 
-def extract_text_from_pdf(file: FileInput) -> str:
+
+def extract_text_from_file(file: io.BytesIO) -> str:
     """
-    Extract all text from a PDF file.
-    
+    Extract text content from a given file-like object.
+
+    Supports text, JSON, and PDF files based on simple heuristics.
+
     Args:
-        file: Path to PDF file (str) or a file-like object (io.BytesIO).
-    
+        file (io.BytesIO): In-memory file object
+
     Returns:
-        Extracted text as a string, or error message on failure.
+        str: Extracted text content or error message
     """
     try:
-        if isinstance(file, str):
-            doc = fitz.open(file)
-        else:
-            file.seek(0)
-            doc = fitz.open(stream=file.read(), filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        return text
-    except Exception as e:
-        return f"[PDF extraction error: {e}]"
-
-def extract_text_from_csv(file: FileInput) -> str:
-    """
-    Extract text content from a CSV file.
-    
-    Args:
-        file: Path to CSV file (str) or a file-like object (io.BytesIO).
-    
-    Returns:
-        CSV contents as a string table, or error message on failure.
-    """
-    try:
-        if isinstance(file, str):
-            df = pd.read_csv(file)
-        else:
-            file.seek(0)
-            df = pd.read_csv(file)
-        return df.to_string()
-    except Exception as e:
-        return f"[CSV extraction error: {e}]"
-
-def extract_text_from_json(file: FileInput) -> str:
-    """
-    Load JSON from file or file-like object and pretty-print with indentation.
-    
-    Args:
-        file: Path to JSON file (str) or a file-like object (io.BytesIO).
-    
-    Returns:
-        JSON pretty string, or error message on failure.
-    """
-    try:
-        if isinstance(file, str):
-            with open(file, "r") as f:
-                data = json.load(f)
-        else:
+        file.seek(0)
+        # Try text decoding first
+        content = file.read()
+        try:
+            text = content.decode("utf-8")
+            return text
+        except UnicodeDecodeError:
+            # Try JSON parsing
             file.seek(0)
             data = json.load(file)
-        return json.dumps(data, indent=2)
-    except Exception as e:
-        return f"[JSON extraction error: {e}]"
+            return json.dumps(data, indent=2)
+    except Exception:
+        # If not text or JSON, try PDF extraction
+        try:
+            file.seek(0)
+            reader = PdfReader(file)
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n\n".join(pages)
+        except Exception as e:
+            return f"[Error extracting text: {e}]"
 
-def extract_text_from_file(file: FileInput) -> Optional[str]:
+
+def search_web(query: str, max_results: int = 3) -> str:
     """
-    Detect file type from extension (if path) or fallback to JSON extraction,
-    then extract text using the appropriate extractor.
-    
+    Perform a DuckDuckGo web search and return formatted result snippets.
+
     Args:
-        file: Path to file (str) or file-like object (io.BytesIO).
-    
+        query (str): Search query string
+        max_results (int): Number of results to return (default 3)
+
     Returns:
-        Extracted text string or None if unsupported.
+        str: Concatenated titles and snippets of search results
     """
     try:
-        # Determine extension if possible
-        ext = None
-        if isinstance(file, str):
-            ext = file.lower().split('.')[-1]
-        else:
-            # If file-like object, try to guess by checking header bytes for PDF or fallback to JSON
-            # For simplicity, just try JSON extraction as fallback
-            ext = None
-
-        if ext == "pdf":
-            return extract_text_from_pdf(file)
-        elif ext == "csv":
-            return extract_text_from_csv(file)
-        elif ext == "json":
-            return extract_text_from_json(file)
-        else:
-            # If unknown extension or file-like object, try JSON extraction as a safe fallback
-            return extract_text_from_json(file)
+        with DDGS() as ddgs:
+            results = ddgs.text(query, max_results=max_results)
+            if not results:
+                return "[No search results found.]"
+            snippets = []
+            for r in results:
+                title = r.get("title", "No title")
+                snippet = r.get("body", "No snippet")
+                snippets.append(f"Title: {title}\nSnippet: {snippet}\n")
+            return "\n".join(snippets)
     except Exception as e:
-        return f"[File extraction error: {e}]"
+        return f"[Search error: {e}]"
 
 
-def get_search_tool():
+def get_tools() -> List[Tool]:
     """
-    Returns a synchronous search function that queries DuckDuckGo using
-    the asynchronous DDGS client from the duckduckgo_search v8.x library.
+    Return a list of LangChain Tool instances to be used by the agent.
 
-    The returned function takes a query string and max_results integer,
-    performs the search asynchronously, and returns a formatted summary string
-    of the top results.
+    Includes:
+    - web_search: DuckDuckGo search tool
+    - extract_text: File text extraction tool
 
     Returns:
-        function: A synchronous search function with signature (query: str, max_results: int) -> str
+        List[Tool]: List of tool objects
     """
 
-    def search(query: str, max_results: int = 3) -> str:
-        """
-        Performs a DuckDuckGo search for the given query and returns
-        a summarized string of results.
+    def extract_text_tool(file: io.BytesIO) -> str:
+        # Wrapper to adapt signature for Tool usage
+        return extract_text_from_file(file)
 
-        Args:
-            query (str): Search query string.
-            max_results (int): Maximum number of results to retrieve (default 3).
+    web_search_tool = Tool(
+        name="web_search",
+        func=search_web,
+        description="Useful for answering questions about recent events or "
+        "specific information not known from training or user profile."
+        "Only use if the question cannot be answered confidently otherwise",
+    )
 
-        Returns:
-            str: Formatted string with titles, snippets, and URLs of search results,
-                 or "No results found." if none.
-        """
+    extract_text_tool_obj = Tool(
+        name="extract_text",
+        func=extract_text_tool,
+        description="Extract text content from an uploaded file (txt, json, pdf).",
+    )
 
-        async def async_search() -> List[Dict]:
-            results = []
-            try:
-                async with DDGS() as client:
-                    async for result in client.text(query, max_results=max_results):
-                        results.append(result)
-            except Exception as e:
-                # Log or handle exceptions as needed
-                print(f"[DuckDuckGo search error]: {e}")
-            return results
-
-        # Run the async search synchronously
-        results = asyncio.run(async_search())
-
-        if not results:
-            return "No results found."
-
-        # Format results into readable summaries
-        summaries = []
-        for res in results:
-            title = res.get("title", "").strip()
-            snippet = res.get("body", "").strip()
-            url = res.get("href", "").strip()
-            entry = f"{title}\n{snippet}\n{url}"
-            summaries.append(entry)
-
-        return "\n\n".join(summaries)
-
-    return search
+    return [web_search_tool, extract_text_tool_obj]
 
