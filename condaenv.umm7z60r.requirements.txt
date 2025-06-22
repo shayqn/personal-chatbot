@@ -1,0 +1,13 @@
+gradio
+langchain
+duckduckgo-search
+pymupdf
+pandas
+openai
+tiktoken
+chromadb
+pyyaml
+rich
+pytest
+black
+flake8
