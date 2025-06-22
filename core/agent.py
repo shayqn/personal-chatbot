@@ -1,47 +1,51 @@
 # core/agent.py
 
+from langchain.agents import initialize_agent
+from langchain.memory import ConversationBufferMemory
 from core.model import get_llm
 from core.tools import get_search_tool
 
+# Initialize the language model
 llm = get_llm()
-search_tool = get_search_tool()
 
-def run_agent(user_message: str, chat_history: list, extracted_text: str = "") -> tuple[str, list]:
+# Initialize conversational memory
+memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
+# Get tools properly wrapped as LangChain Tool objects
+tools = [get_search_tool()]
+
+# Initialize the LangChain agent with tools and memory
+agent = initialize_agent(
+    tools,
+    llm,
+    agent="conversational-react-description",
+    memory=memory,
+    verbose=True,
+)
+
+def run_agent(input_text: str, chat_history: list, context_text: str = "") -> tuple[str, list]:
     """
-    Main agent function to process user message with chat history and optional extracted file context.
+    Runs the LangChain agent with the given input, history, and context.
 
     Args:
-        user_message (str): The latest user input message.
-        chat_history (list): List of tuples (user, assistant) representing the conversation.
-        extracted_text (str): Optional extracted content from uploaded files.
+        input_text (str): The current user prompt.
+        chat_history (list): List of prior conversation messages.
+        context_text (str): Optional additional context.
 
     Returns:
-        response (str): Assistant's response.
-        updated_chat_history (list): Updated chat history including the new exchange.
+        response (str): Agent's response.
+        new_chat_history (list): Updated conversation history.
     """
+    # Combine context with the input prompt
+    if context_text:
+        prompt = f"{context_text}\n\nUser: {input_text}"
+    else:
+        prompt = input_text
 
-    # Compose context for LLM prompt
-    # You can adjust prompt formatting as needed
-    context_parts = []
-
-    if chat_history:
-        # Flatten chat history into a string for context
-        for i, (user_msg, assistant_msg) in enumerate(chat_history):
-            context_parts.append(f"User: {user_msg}")
-            context_parts.append(f"Assistant: {assistant_msg}")
-
-    if extracted_text:
-        context_parts.append(f"Extracted File Content:\n{extracted_text}")
-
-    context_parts.append(f"User: {user_message}")
-
-    prompt = "\n".join(context_parts) + "\nAssistant:"
-
-    # Optionally, implement web search trigger based on user_message content or a keyword
-    # For now, we keep it simple and just query the LLM with the full context
-    response = llm(prompt)
+    # Run the agent and get a response
+    response = agent.run(prompt)
 
     # Update chat history
-    updated_chat_history = chat_history + [(user_message, response)]
+    new_chat_history = chat_history + [(input_text, response)]
 
-    return response, updated_chat_history
+    return response, new_chat_history
