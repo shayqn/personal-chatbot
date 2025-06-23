@@ -1,34 +1,23 @@
 # core/memory.py
 
 """
-Conversation Memory Management
+Conversation Memory Setup
 
-Provides a reusable function to create and return
-a LangChain ConversationBufferMemory instance
-initialized with an optional system message.
+Uses buffer memory with support for a persistent system message.
 
 Author: Shay Neufeld
 """
 
-from typing import Optional
 from langchain.memory import ConversationBufferMemory
-from langchain_core.messages import SystemMessage
+from typing import Optional, List
+from langchain_core.messages import BaseMessage
 
 
-def get_memory(system_message: Optional[SystemMessage] = None) -> ConversationBufferMemory:
-    """
-    Create a conversation memory buffer.
-
-    Args:
-        system_message (Optional[SystemMessage]): Initial system message to prime memory.
-
-    Returns:
-        ConversationBufferMemory: Memory instance maintaining chat history.
-    """
-    initial_messages = [system_message] if system_message else []
-    memory = ConversationBufferMemory(
+def get_memory(initial_messages: Optional[List[BaseMessage]] = None):
+    return ConversationBufferMemory(
         memory_key="chat_history",
         return_messages=True,
-        initial_messages=initial_messages,
+        input_key="input",
+        output_key="output",
+        initial_messages=initial_messages or [],
     )
-    return memory

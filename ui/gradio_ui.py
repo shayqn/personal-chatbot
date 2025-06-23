@@ -1,79 +1,56 @@
-# ui/gradio_ui.py
-
-"""
-Gradio Chat UI for Local LLM Assistant with Async Streaming
-
-Features:
-- Streams bot response tokens as they arrive
-- Displays full conversation history
-- Immediate user message display and input clearing
-
-Author: Shay Neufeld
-"""
-
-from typing import List, Tuple, AsyncGenerator
 import gradio as gr
-from core.agent import run_agent_streaming
+from agent import run_agent_streaming  # Your streaming agent generator
 
-ChatHistory = List[Tuple[str, str]]  # (user_message, bot_message)
+async def stream_response(user_message, chat_history):
+    chat_history = chat_history or []
 
+    # Append the user message with role "user"
+    chat_history.append({"role": "user", "content": user_message})
 
-async def stream_response(
-    user_message: str, history: ChatHistory
-) -> AsyncGenerator[Tuple[ChatHistory, ChatHistory], None]:
-    """
-    Async generator that yields chat history updates as new tokens arrive.
+    # Append an empty assistant message for streaming output
+    chat_history.append({"role": "assistant", "content": ""})
 
-    Args:
-        user_message (str): The user's input message.
-        history (ChatHistory): Current chat history.
+    response_chunks = run_agent_streaming(user_message, chat_history)
 
-    Yields:
-        Tuple[ChatHistory, ChatHistory]: Updated chat history for display and state.
-    """
-    # Immediately append user's message with empty bot response
-    history = history + [(user_message, "")]
+    for chunk in response_chunks:
+        # Append chunk to the last assistant message
+        chat_history[-1]["content"] += chunk
+        yield "", chat_history, chat_history
 
-    # Stream tokens from agent
-    async for token in run_agent_streaming(user_message, history):
-        user_msg, bot_msg = history[-1]
-        bot_msg += token
-        history[-1] = (user_msg, bot_msg)
+def clear_textbox():
+    return ""
 
-        # Yield updated history twice (once for display, once for state)
-        yield history, history
-
-
-def launch_ui():
-    """
-    Initialize and launch the Gradio UI.
-    """
+def build_ui():
     with gr.Blocks() as demo:
-        gr.Markdown("# Local LLM Assistant")
-
-        chatbot = gr.Chatbot(elem_id="chatbot").style(height=600)
-        state = gr.State([])  # Stores chat history
-
-        user_input = gr.Textbox(
-            placeholder="Enter message here...",
-            label="Your message",
-            lines=2,
-            max_lines=5,
+        chatbot = gr.Chatbot(
+            label="Conversation",
+            height=500,
+            show_copy_button=True,
+            type="messages"  # <-- Use messages format here
         )
+        user_input = gr.Textbox(placeholder="Type your message here...", show_label=False)
+        submit_btn = gr.Button("Send")
+        clear_btn = gr.Button("Clear Chat")
 
-        # Submit handler: stream_response streams tokens, updates chatbot and state
-        user_input.submit(
+        state = gr.State([])  # chat history as list of messages
+
+        submit_btn.click(
             fn=stream_response,
             inputs=[user_input, state],
-            outputs=[chatbot, state],
-            stream=True,
+            outputs=[user_input, chatbot, state],
+            queue=True,
+        )
+        submit_btn.click(fn=clear_textbox, inputs=None, outputs=user_input, queue=False)
+
+        clear_btn.click(
+            fn=lambda: ([], [], ""),  # reset state, chatbot and clear input
+            inputs=None,
+            outputs=[state, chatbot, user_input],
+            queue=False,
         )
 
-        # Clear input after submit for UX
-        user_input.submit(lambda: "", None, user_input)
-
-    demo.launch()
-
+    return demo
 
 if __name__ == "__main__":
-    launch_ui()
+    demo = build_ui()
+    demo.launch()

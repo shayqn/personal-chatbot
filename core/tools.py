@@ -1,42 +1,65 @@
 # core/tools.py
 
 """
-Tool Definitions for Conversational Agent
+LangChain-compatible tools for external actions.
 
-Includes external tool wrappers and utility extraction tools.
-All tools are returned from get_tools() to be loaded by the agent.
+Includes:
+- Internet search via DuckDuckGo
+- Web page content fetching
+- File analysis (PDF, CSV, TXT, JSON)
 
-Author: Shay Neufeld
+These tools are available to the conversational agent when it determines external info is needed.
 """
 
+from langchain.agents import Tool
 from typing import List
-from langchain.tools import Tool
-from langchain.utilities import DuckDuckGoSearchAPIWrapper
 
-
-def duckduckgo_search_tool() -> Tool:
-    """
-    Create a DuckDuckGo Search tool instance.
-
-    Returns:
-        Tool: LangChain Tool wrapping DuckDuckGo Search.
-    """
-    search = DuckDuckGoSearchAPIWrapper()
-    return Tool(
-        name="DuckDuckGo Search",
-        func=search.run,
-        description="Useful for answering questions about current events or general knowledge."
-    )
+from core.utils.web_utils import search_duckduckgo, fetch_page_content
+from core.utils.file_utils import (
+    extract_text_from_txt,
+    extract_text_from_pdf,
+    extract_text_from_csv,
+    extract_text_from_json,
+)
 
 
 def get_tools() -> List[Tool]:
     """
-    Return all tools available to the agent.
+    Build and return a list of tools usable by the LangChain agent.
 
     Returns:
-        List[Tool]: List of LangChain tools.
+        List[Tool]: A list of LangChain-compatible Tool instances.
     """
-    return [
-        duckduckgo_search_tool(),
-        # Add other tools here if you create extraction or file handling tools later
+    tools = [
+        Tool(
+            name="DuckDuckGo Search",
+            func=lambda query: str(search_duckduckgo(query)),
+            description="Useful when you need to search the internet for recent or general information.",
+        ),
+        Tool(
+            name="Web Page Extractor",
+            func=fetch_page_content,
+            description="Use this to extract clean article content from a given URL.",
+        ),
+        Tool(
+            name="Extract PDF Text",
+            func=extract_text_from_pdf,
+            description="Use this to extract and analyze text from a PDF file path.",
+        ),
+        Tool(
+            name="Extract CSV Text",
+            func=extract_text_from_csv,
+            description="Use this to load and interpret tabular data from a CSV file path.",
+        ),
+        Tool(
+            name="Extract TXT Text",
+            func=extract_text_from_txt,
+            description="Use this to extract plain text from a TXT file path.",
+        ),
+        Tool(
+            name="Extract JSON Text",
+            func=extract_text_from_json,
+            description="Use this to parse and summarize the structure/content of a JSON file path.",
+        ),
     ]
+    return tools
