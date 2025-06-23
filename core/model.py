@@ -17,7 +17,26 @@ def get_llm():
     return Ollama(model="llama3.2:latest", server_url="http://localhost:11434")
 '''
 
+# core/model.py
+
 from langchain_ollama import OllamaLLM
 
-def get_llm():
-    return OllamaLLM(model="llama3.2:latest", base_url="http://localhost:11434")
+def get_llm(callbacks=None):
+    """
+    Initialize and return the LLM instance.
+
+    Args:
+        callbacks (list, optional): List of callback handlers to pass to the LLM.
+
+    Returns:
+        OllamaLLM: The initialized language model.
+    """
+    llm_kwargs = {
+        "model": "llama3.2:latest",
+        "base_url": "http://localhost:11434"
+    }
+    if callbacks:
+        llm_kwargs["callbacks"] = callbacks
+
+    return OllamaLLM(**llm_kwargs)
+
