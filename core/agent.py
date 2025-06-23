@@ -1,52 +1,53 @@
-# core/agent.py
+# agent.py
 
-"""
-LangChain Conversational Agent with Streaming + Memory Support
-
-This agent:
-- Loads profile and memory
-- Uses a streaming callback handler
-- Yields output tokens as they are generated
-"""
-
-# core/agent.py
-from langchain.agents import initialize_agent, AgentType
-from langchain_core.messages import SystemMessage
-from langchain.callbacks.base import BaseCallbackHandler
-
-from core.model import get_llm
-from core.tools import get_tools
-from core.memory import get_memory
-from core.profile import load_profile, format_profile_as_context
-
-import asyncio
 from typing import AsyncGenerator, List
-
-class StreamingHandler(BaseCallbackHandler):
-    def __init__(self):
-        self.tokens: List[str] = []
-
-    def on_llm_new_token(self, token: str, **kwargs) -> None:
-        print(f"[streaming token] {token}", flush=True)
-        self.tokens.append(token)
-
-    async def stream(self) -> AsyncGenerator[str, None]:
-        while True:
-            if self.tokens:
-                yield self.tokens.pop(0)
-            else:
-                await asyncio.sleep(0.05)  # Prevent CPU spinning
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain.agents import initialize_agent, AgentType, Tool
+from core.model import get_llm
+from core.memory import get_memory
+from core.tools import get_tools
+from core.profile import load_profile, format_profile_as_context
+from core.stream_handler import StreamingHandler  # your async callback handler
 
 
-async def run_agent_streaming(message: str) -> AsyncGenerator[str, None]:
+def convert_gradio_messages_to_langchain(chat_history: List[dict]) -> List:
+    """
+    Convert Gradio-style messages (with 'role' and 'content') into
+    LangChain message objects.
+    """
+    messages = []
+    for m in chat_history:
+        role = m["role"]
+        content = m["content"]
+        if role == "user":
+            messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            messages.append(AIMessage(content=content))
+        # system messages are handled separately via profile
+    return messages
+
+
+async def run_agent_streaming(chat_history: List[dict]) -> AsyncGenerator[str, None]:
+    """
+    Accepts full chat history in Gradio format, constructs agent with profile + memory,
+    and streams token-by-token response from the agent.
+    """
+    # Load profile and system context
     profile = load_profile()
     system_message = SystemMessage(content=format_profile_as_context(profile))
-    memory = get_memory(initial_messages=[system_message])
 
+    # Convert chat history (minus system) to LangChain messages
+    lc_history = convert_gradio_messages_to_langchain(chat_history)
+
+    # Add system context as first message
+    memory = get_memory(initial_messages=[system_message])
+    
+    # Setup streaming
     stream_handler = StreamingHandler()
     llm = get_llm(streaming=True, callbacks=[stream_handler])
     tools = get_tools()
 
+    # Initialize agent with memory + tools
     agent = initialize_agent(
         tools=tools,
         llm=llm,
@@ -56,11 +57,18 @@ async def run_agent_streaming(message: str) -> AsyncGenerator[str, None]:
         handle_parsing_errors=True,
     )
 
+    # Run the agent with the most recent user message
+    last_user_message = next((m["content"] for m in reversed(chat_history) if m["role"] == "user"), None)
+    if not last_user_message:
+        yield "[Error: No user message found]"
+        return
+
     try:
-        agent.run(message)
+        agent.run(last_user_message)
     except Exception as e:
         yield f"[Agent Error] {str(e)}"
         return
 
+    # Stream tokens from handler
     async for token in stream_handler.stream():
         yield token
