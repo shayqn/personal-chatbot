@@ -10,6 +10,19 @@ from core.profile import load_profile, format_profile_as_context
 from core.stream_handler import StreamingHandler  # your async callback handler
 
 
+# Profile context
+profile = load_profile()
+system_message = SystemMessage(content=format_profile_as_context(profile))
+
+# 🧠 Persistent memory (created once)
+memory = get_memory(initial_messages=[system_message])
+
+# ✅ Manually insert profile system message at start of memory
+memory.chat_memory.messages.insert(0, system_message)
+
+# 🛠 Tools are static, load once
+tools = get_tools()
+
 def convert_gradio_messages_to_langchain(chat_history: List[dict]) -> List:
     """
     Convert Gradio-style messages (with 'role' and 'content') into
@@ -38,9 +51,8 @@ async def run_agent_streaming(chat_history: List[dict]) -> AsyncGenerator[str, N
 
     # Convert chat history (minus system) to LangChain messages
     lc_history = convert_gradio_messages_to_langchain(chat_history)
-
-    # Add system context as first message
-    memory = get_memory(initial_messages=[system_message])
+    
+    
     
     # Setup streaming
     stream_handler = StreamingHandler()
