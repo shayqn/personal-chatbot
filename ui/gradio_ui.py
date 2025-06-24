@@ -1,69 +1,91 @@
-"""
-gradio_ui.py
-
-Defines the Gradio-based user interface for interacting with the chatbot agent.
-Maintains chat history state and manages user input/output flows.
-
-Requires:
-- core.agent.run_agent(message: str, chat_history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]
-
-Author: Shay Neufeld (adapted)
-Date: 2025-06-22
-"""
+# gradio_ui.py
 
 import gradio as gr
-from typing import List, Tuple
+from typing import List, Dict
+from core.agent import run_agent_streaming
+        
+import asyncio
 
-from core.agent import run_agent
+# Step 1: Add the user message and placeholder assistant message
+def submit_user_message(user_message: str, chat_history: List[Dict[str, str]]):
+    chat_history = chat_history or []
+    chat_history.append({"role": "user", "content": user_message})
+    chat_history.append({"role": "assistant", "content": ""})
+    return "", chat_history, chat_history
 
-def chat_with_agent(
-    message: str,
-    chat_history: List[Tuple[str, str]]
-) -> Tuple[List[List[str]], List[Tuple[str, str]]]:
-    """
-    Process user input through the chatbot agent and update conversation history.
+# Step 2: Stream the assistant response
+async def stream_bot_response(chat_history: List[Dict[str, str]]):
+    async for chunk in run_agent_streaming(chat_history):
+        chat_history[-1]["content"] += chunk
+        yield "", chat_history, chat_history
 
-    Args:
-        message (str): The new user message to process.
-        chat_history (List[Tuple[str, str]]): Existing conversation as list of (user_msg, bot_msg) tuples.
+def clear_textbox():
+    return ""
 
-    Returns:
-        Tuple[List[List[str]], List[Tuple[str, str]]]:
-            - Updated chat history formatted as a list of [user_msg, bot_msg] lists (for Gradio UI).
-            - Updated internal chat history as list of tuples for state management.
-    """
-    # Run the agent to get response and updated history
-    response, updated_history = run_agent(message, chat_history)
+def build_ui():
+    with gr.Blocks() as demo:
+        chatbot = gr.Chatbot(label="Conversation", height=500, show_copy_button=True, type="messages")
 
-    # Convert tuple-based history to list-of-lists for Gradio Chatbot compatibility
-    gradio_history = [[user, bot] for user, bot in updated_history]
+        user_input = gr.Textbox(
+            placeholder="Type your message here...",
+            show_label=False,
+            lines=1,
+            autofocus=True
+        )
 
-    return gradio_history, updated_history
+        submit_btn = gr.Button("Send")
+        clear_btn = gr.Button("Clear Chat")
+        state = gr.State([])
+
+        # Step 1: Add user message immediately
+        submit_btn.click(
+            fn=submit_user_message,
+            inputs=[user_input, state],
+            outputs=[user_input, chatbot, state],
+            queue=False
+        )
+
+        user_input.submit(
+            fn=submit_user_message,
+            inputs=[user_input, state],
+            outputs=[user_input, chatbot, state],
+            queue=False
+        )
+
+        # Step 2: Begin streaming after UI updates
+        submit_btn.click(
+            fn=stream_bot_response,
+            inputs=[state],
+            outputs=[user_input, chatbot, state],
+            queue=True
+        )
+
+        user_input.submit(
+            fn=stream_bot_response,
+            inputs=[state],
+            outputs=[user_input, chatbot, state],
+            queue=True
+        )
+
+        # Clear user input after submission
+        submit_btn.click(fn=clear_textbox, inputs=None, outputs=user_input, queue=False)
+        user_input.submit(fn=clear_textbox, inputs=None, outputs=user_input, queue=False)
+
+        # Clear everything
+        clear_btn.click(
+            fn=lambda: ([], [], ""),
+            inputs=None,
+            outputs=[state, chatbot, user_input],
+            queue=False
+        )
+
+    return demo
 
 def launch_ui():
-    """
-    Launches the Gradio web UI, setting up chatbot interface, inputs, and event handlers.
-    """
-    with gr.Blocks() as demo:
-        chatbot = gr.Chatbot(label="Personal Assistant Chatbot")
-        user_input = gr.Textbox(
-            label="Enter your message",
-            placeholder="Type your message here and press Enter"
-        )
-        clear_button = gr.Button("Clear Conversation")
-
-        # State to hold the chat history as List[Tuple[str, str]]
-        chat_state = gr.State([])
-
-        # Submit handler: send user input and history to agent, update UI
-        def on_submit(message, history):
-            return chat_with_agent(message, history)
-
-        # Bind submit and clear button events
-        user_input.submit(on_submit, inputs=[user_input, chat_state], outputs=[chatbot, chat_state])
-        clear_button.click(lambda: ([], []), inputs=None, outputs=[chatbot, chat_state])
-
+    demo = build_ui()
     demo.launch()
 
+
 if __name__ == "__main__":
-    launch_ui()
+    demo = build_ui()
+    demo.launch()

@@ -1,104 +1,86 @@
-# core/agent.py
+# agent.py
 
-"""
-Agent module for the local LLM assistant.
-
-This module sets up and runs a LangChain conversational agent
-that integrates user profile context, memory, and external tools
-such as web search. It manages the conversation memory with
-a system role message containing the user profile to provide
-personalized and context-aware responses.
-
-Key functions:
-- create_system_message: Generate system prompt from user profile
-- run_agent: Run the agent with input message, memory, and tools
-"""
-
-from typing import List, Tuple, Any
-
-from langchain.memory import ConversationBufferMemory
-from langchain.schema import SystemMessage
-from langchain.agents import initialize_agent, AgentType
-from langchain.schema import HumanMessage, AIMessage
+from typing import AsyncGenerator, List
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain.agents import initialize_agent, AgentType, Tool
 from core.model import get_llm
+from core.memory import get_memory
 from core.tools import get_tools
-from core.profile import load_profile
+from core.profile import load_profile, format_profile_as_context
+from core.stream_handler import StreamingHandler  # your async callback handler
 
 
+# Profile context
+profile = load_profile()
+system_message = SystemMessage(content=format_profile_as_context(profile))
 
+# 🧠 Persistent memory (created once)
+memory = get_memory(initial_messages=[system_message])
 
-def create_system_message(profile: dict) -> str:
+# ✅ Manually insert profile system message at start of memory
+memory.chat_memory.messages.insert(0, system_message)
+
+# 🛠 Tools are static, load once
+tools = get_tools()
+
+def convert_gradio_messages_to_langchain(chat_history: List[dict]) -> List:
     """
-    Build a system message string incorporating user profile info.
-
-    Args:
-        profile (dict): User profile loaded from profile.json
-
-    Returns:
-        str: System prompt describing user info and behavior instructions
+    Convert Gradio-style messages (with 'role' and 'content') into
+    LangChain message objects.
     """
-    interests = ", ".join(profile.get("interests", []))
-    style = profile.get("preferences", {}).get("response_style", "")
-    name = profile.get("name", "User")
-
-    system_msg = (
-        "You are a helpful assistant. "
-        "Use the following information to personalize your responses:\n"
-        f"User's name: {name}\n"
-        f"Interests: {interests}\n"
-        f"Preferred response style: {style}\n"
-        "You should only use external tools like search if the user's question requires "
-        "information beyond what you confidently know or the user profile.\n"
-        "For personal or common knowledge questions, answer directly and clearly without searching.\n"
-    )
-    return system_msg
+    messages = []
+    for m in chat_history:
+        role = m["role"]
+        content = m["content"]
+        if role == "user":
+            messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            messages.append(AIMessage(content=content))
+        # system messages are handled separately via profile
+    return messages
 
 
-def run_agent(message: str, chat_history: List[Tuple[str, str]]) -> Tuple[str, List[Tuple[str, str]]]:
+async def run_agent_streaming(chat_history: List[dict]) -> AsyncGenerator[str, None]:
     """
-    Process a user message through the LangChain agent with memory and tools.
-
-    Args:
-        message (str): The user's input message
-        chat_history (List[Tuple[str, str]]): The current conversation history
-
-    Returns:
-        Tuple[str, List[Tuple[str, str]]]: Agent's response and updated chat history
+    Accepts full chat history in Gradio format, constructs agent with profile + memory,
+    and streams token-by-token response from the agent.
     """
-
-    # Load profile info and generate system prompt
+    # Load profile and system context
     profile = load_profile()
-    system_message_str = create_system_message(profile)
+    system_message = SystemMessage(content=format_profile_as_context(profile))
 
-    # Setup memory and replay past conversation into memory
-    memory = ConversationBufferMemory(
-        memory_key="chat_history",
-        return_messages=True,
-        initial_messages=[SystemMessage(content=system_message_str)],
-    )
-
-    # Rebuild memory with prior chat messages
-    for user_msg, bot_msg in chat_history:
-        memory.chat_memory.add_user_message(user_msg)
-        memory.chat_memory.add_ai_message(bot_msg)
-
-    # Load LLM and tools
-    llm = get_llm()
+    # Convert chat history (minus system) to LangChain messages
+    lc_history = convert_gradio_messages_to_langchain(chat_history)
+    
+    
+    
+    # Setup streaming
+    stream_handler = StreamingHandler()
+    llm = get_llm(streaming=True, callbacks=[stream_handler])
     tools = get_tools()
 
-    # Initialize agent with memory
+    # Initialize agent with memory + tools
     agent = initialize_agent(
         tools=tools,
         llm=llm,
-        agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
         memory=memory,
+        agent=AgentType.CONVERSATIONAL_REACT_DESCRIPTION,
         verbose=True,
+        handle_parsing_errors=True,
     )
 
-    # Generate response
-    response = agent.run(input=message)
+    # Run the agent with the most recent user message
+    last_user_message = next((m["content"] for m in reversed(chat_history) if m["role"] == "user"), None)
+    if not last_user_message:
+        yield "[Error: No user message found]"
+        return
 
-    # Append latest interaction to chat history
-    updated_history = chat_history + [(message, response)]
+    try:
+        agent.run(last_user_message)
+    except Exception as e:
+        yield f"[Agent Error] {str(e)}"
+        return
 
-    return response, updated_history
+    # Stream tokens from handler
+    async for token in stream_handler.stream():
+        yield token
